@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"os"
+	"time"
 )
 
 // Reader object
@@ -13,6 +14,13 @@ type Reader struct {
 	header       *Header
 	headerBuffer []byte
 	compact      bool
+
+	nextArrayOffset uint64
+	nextItemOffset  int
+
+	pollTimeMs time.Duration
+
+	data chan Log
 }
 
 // newReader creates Reader for the given filename
@@ -38,11 +46,15 @@ func newReader(filename string) (*Reader, error) {
 
 	// return Reader
 	return &Reader{
-		file:         file,
-		buffer:       make([]byte, 1024*1024*1024),
-		headerBuffer: make([]byte, OBJECT_HEADER_SIZE),
-		header:       header,
-		compact:      header.isCompact(),
+		file:            file,
+		buffer:          make([]byte, 1024*1024*1024),
+		headerBuffer:    make([]byte, OBJECT_HEADER_SIZE),
+		header:          header,
+		compact:         header.isCompact(),
+		nextArrayOffset: header.entry_array_offset,
+		nextItemOffset:  0,
+		data:            make(chan Log),
+		pollTimeMs:      200,
 	}, nil
 }
 
@@ -91,6 +103,10 @@ func (r *Reader) getData(offset uint64) (*Data, error) {
 	return oh.Data(r.compact), nil
 }
 
+func (r *Reader) isArchived() bool {
+	return r.header.isArchived()
+}
+
 // getEntryArray returns EntryArray object starting with given offset
 func (r *Reader) getEntryArray(offset uint64) (*EntryArray, error) {
 	// read object starting with given offset
@@ -112,4 +128,90 @@ func (r *Reader) getEntry(offset uint64) (*Entry, error) {
 
 	// return EntryArray object
 	return oh.Entry(r.compact), nil
+}
+
+// readData from specific Entry
+func (r *Reader) readData(entry *Entry) map[string]string {
+	// get list of Data offset
+	dataOffsets := entry.items()
+	attributes := map[string]string{}
+
+	for _, dataOffset := range dataOffsets {
+		// there is nothing more to read for this Data
+		if dataOffset.object_offset == 0 {
+			break
+		}
+
+		// read Data starting with given offset
+		dataObject, err := r.getData(dataOffset.object_offset)
+		if err != nil {
+			panic(err)
+		}
+
+		// get key value pair of the Data and append to the attributes list
+		key, value, err := dataObject.getPayloadKeyValue()
+		if err != nil {
+			panic(err)
+		}
+		attributes[key] = value
+	}
+
+	return attributes
+}
+
+// getNextEntry returns next entry in the queue
+func (r *Reader) getNextEntry() (*Entry, error) {
+	entryArray, err := r.getEntryArray(r.nextArrayOffset)
+	if err != nil {
+		return nil, err
+	}
+
+	entryOffset := entryArray.items()[r.nextItemOffset]
+
+	// return nils if there is nothing to read
+	if entryOffset == 0 {
+		return nil, nil
+	}
+
+	// set pointer to next element
+	if r.nextItemOffset == entryArray.countItems-1 {
+		r.nextItemOffset = 0
+		r.nextArrayOffset = entryArray.next_entry_array_offset
+	} else {
+		r.nextItemOffset += 1
+	}
+
+	// return entry
+	return r.getEntry(entryOffset)
+}
+
+// readAll reads the data and push it to data channel
+func (r *Reader) readAll() {
+main:
+	for {
+		for {
+			entry, err := r.getNextEntry()
+
+			if err != nil {
+				panic(err)
+			}
+
+			if entry == nil {
+				switch r.header.state {
+				// file is rotated, so we do not expect more data
+				case STATE_ARCHIVED:
+					close(r.data)
+					break main
+				// wait for more data
+				default:
+					time.Sleep(r.pollTimeMs * time.Millisecond)
+					continue main
+				}
+			}
+
+			r.data <- Log{
+				attributes: r.readData(entry),
+			}
+		}
+	}
 }

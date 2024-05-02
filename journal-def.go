@@ -177,6 +177,21 @@ func (hu Header) isCompact() bool {
 	return hu.incompatible_flags&HEADER_INCOMPATIBLE_COMPACT > 0
 }
 
+// isOnline returns true if state is online
+func (hu Header) isOnline() bool {
+	return hu.state&STATE_ONLINE > 0
+}
+
+// isOnline returns true if state is offline
+func (hu Header) isOffline() bool {
+	return hu.state&STATE_OFFLINE > 0
+}
+
+// isOnline returns true if state is archived
+func (hu Header) isArchived() bool {
+	return hu.state&STATE_ARCHIVED > 0
+}
+
 // Definition of ObjectHeader type
 // rel: https://systemd.io/JOURNAL_FILE_FORMAT/#objects
 type ObjectHeader struct {
@@ -483,11 +498,14 @@ type EntryArray struct {
 
 	regularItems []uint64 // le64_t[] // if not HEADER_INCOMPATIBLE_COMPACT
 	compactItems []uint32 // le32_t[] // for HEADER_INCOMPATIBLE_COMPACT
+
+	countItems int
 }
 
 // items returns EntryArray items in format of regularItems
 func (eao *EntryArray) items() []uint64 {
 	if len(eao.regularItems) > 0 {
+		eao.countItems = len(eao.regularItems)
 		return eao.regularItems
 	}
 
@@ -495,6 +513,7 @@ func (eao *EntryArray) items() []uint64 {
 	for _, item := range eao.compactItems {
 		items = append(items, uint64(item))
 	}
+	eao.countItems = len(eao.compactItems)
 	return items
 }
 
