@@ -56,6 +56,10 @@ const (
 	// uint8_t -> 1
 	// le64_t -> 8
 	OBJECT_HEADER_SIZE = 8*1 + 1*8
+
+	ATTRIBUTE_CURSOR              = "__CURSOR"
+	ATTRIBUTE_REALTIME_TIMESTAMP  = "__REALTIME_TIMESTAMP"
+	ATTRIBUTE_MONOTONIC_TIMESTAMP = "__MONOTONIC_TIMESTAMP"
 )
 
 // le32 converts [4]byte to uint32

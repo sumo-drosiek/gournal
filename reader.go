@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"time"
 )
@@ -42,6 +43,7 @@ func newReader(filename string) (*Reader, error) {
 	}
 
 	reader.loadHeader()
+	reader.resetOffset()
 
 	// return Reader
 	return &reader, nil
@@ -63,9 +65,12 @@ func (r *Reader) loadHeader() error {
 
 	r.header = header
 	r.compact = header.isCompact()
-	r.nextArrayOffset = header.entry_array_offset
 
 	return nil
+}
+
+func (r *Reader) resetOffset() {
+	r.nextArrayOffset = r.header.entry_array_offset
 }
 
 // getObject reads the object starting with the given offset
@@ -140,11 +145,60 @@ func (r *Reader) getEntry(offset uint64) (*Entry, error) {
 	return oh.Entry(r.compact), nil
 }
 
+// get cursor value
+func (r *Reader) getCursor(entry *Entry) string {
+	return fmt.Sprintf(
+		"s=%x;i=%x;b=%x;m=%x;t=%x;x=%x",
+		r.header.seqnum_id[:],
+		entry.seqnum,
+		entry.boot_id[:],
+		entry.monotonic,
+		entry.realtime,
+		entry.xor_hash,
+	)
+}
+
+// set next entry right after the cursor
+func (r *Reader) goToCursor(cursor string) error {
+	r.loadHeader()
+	r.resetOffset()
+
+main:
+	for {
+		for {
+			entry, err := r.getNextEntry()
+
+			if err != nil {
+				return err
+			}
+
+			if entry == nil {
+				break main
+			}
+
+			// we just read the entry from the cursor, so next one will be to read
+			if r.getCursor(entry) == cursor {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("entry for specified cursor has not been find")
+}
+
+// initAttributes returns map containing attributes based on the entry structure
+func (r *Reader) initAttributes(entry *Entry) map[string]string {
+	return map[string]string{
+		ATTRIBUTE_CURSOR:              r.getCursor(entry),
+		ATTRIBUTE_REALTIME_TIMESTAMP:  fmt.Sprintf("%d", entry.realtime),
+		ATTRIBUTE_MONOTONIC_TIMESTAMP: fmt.Sprintf("%d", entry.monotonic),
+	}
+}
+
 // readData from specific Entry
-func (r *Reader) readData(entry *Entry) map[string]string {
+func (r *Reader) readData(entry *Entry) (map[string]string, error) {
 	// get list of Data offset
 	dataOffsets := entry.items()
-	attributes := map[string]string{}
+	attributes := r.initAttributes(entry)
 
 	for _, dataOffset := range dataOffsets {
 		// there is nothing more to read for this Data
@@ -155,18 +209,18 @@ func (r *Reader) readData(entry *Entry) map[string]string {
 		// read Data starting with given offset
 		dataObject, err := r.getData(dataOffset.object_offset)
 		if err != nil {
-			panic(err)
+			return map[string]string{}, err
 		}
 
 		// get key value pair of the Data and append to the attributes list
 		key, value, err := dataObject.getPayloadKeyValue()
 		if err != nil {
-			panic(err)
+			return map[string]string{}, err
 		}
 		attributes[key] = value
 	}
 
-	return attributes
+	return attributes, nil
 }
 
 // getNextEntry returns next entry in the queue
@@ -197,6 +251,7 @@ func (r *Reader) getNextEntry() (*Entry, error) {
 
 // readAll reads the data and push it to data channel
 func (r *Reader) readAll(ctx context.Context) {
+	fmt.Printf("Read all\n")
 main:
 	for {
 		for {
@@ -228,8 +283,15 @@ main:
 				}
 			}
 
+			attributes, err := r.readData(entry)
+
+			if err != nil {
+				// ToDo convert to log or propagate error
+				panic(err)
+			}
+
 			r.data <- Log{
-				attributes: r.readData(entry),
+				attributes: attributes,
 			}
 		}
 	}
