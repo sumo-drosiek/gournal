@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"time"
@@ -18,7 +19,7 @@ type Reader struct {
 	nextArrayOffset uint64
 	nextItemOffset  int
 
-	pollTimeMs time.Duration
+	pollTime time.Duration
 
 	data chan Log
 }
@@ -31,31 +32,40 @@ func newReader(filename string) (*Reader, error) {
 		return nil, err
 	}
 
+	reader := Reader{
+		file:           file,
+		buffer:         make([]byte, 1024*1024*1024),
+		headerBuffer:   make([]byte, OBJECT_HEADER_SIZE),
+		nextItemOffset: 0,
+		data:           make(chan Log),
+		pollTime:       200 * time.Millisecond,
+	}
+
+	reader.loadHeader()
+
+	// return Reader
+	return &reader, nil
+}
+
+func (r *Reader) loadHeader() error {
 	// prepare buffer and read file header
 	buffer := make([]byte, HEADER_MAX_SIZE)
-	_, err = file.Read(buffer)
+	_, err := r.file.Read(buffer)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	header := newHeader(buffer)
 
 	// check file signature
 	if string(header.signature[:]) != "LPKSHHRH" {
-		return nil, errors.New("file signature is invalid")
+		return errors.New("file signature is invalid")
 	}
 
-	// return Reader
-	return &Reader{
-		file:            file,
-		buffer:          make([]byte, 1024*1024*1024),
-		headerBuffer:    make([]byte, OBJECT_HEADER_SIZE),
-		header:          header,
-		compact:         header.isCompact(),
-		nextArrayOffset: header.entry_array_offset,
-		nextItemOffset:  0,
-		data:            make(chan Log),
-		pollTimeMs:      200,
-	}, nil
+	r.header = header
+	r.compact = header.isCompact()
+	r.nextArrayOffset = header.entry_array_offset
+
+	return nil
 }
 
 // getObject reads the object starting with the given offset
@@ -186,10 +196,11 @@ func (r *Reader) getNextEntry() (*Entry, error) {
 }
 
 // readAll reads the data and push it to data channel
-func (r *Reader) readAll() {
+func (r *Reader) readAll(ctx context.Context) {
 main:
 	for {
 		for {
+			r.loadHeader()
 			entry, err := r.getNextEntry()
 
 			if err != nil {
@@ -202,9 +213,17 @@ main:
 				case STATE_ARCHIVED:
 					close(r.data)
 					break main
+				// wait for database to be in offline state
+				case STATE_ONLINE:
+					time.Sleep(r.pollTime)
+					continue main
 				// wait for more data
 				default:
-					time.Sleep(r.pollTimeMs * time.Millisecond)
+					if ctx.Err() != nil {
+						close(r.data)
+						break main
+					}
+					time.Sleep(r.pollTime)
 					continue main
 				}
 			}

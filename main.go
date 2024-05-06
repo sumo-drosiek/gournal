@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 func main() {
 	filename := "test-data/user-1000.journal"
@@ -10,7 +13,7 @@ func main() {
 		panic(err)
 	}
 
-	go reader.readAll()
+	go reader.readAll(context.Background())
 
 	for log := range reader.data {
 		fmt.Printf("\n\n")

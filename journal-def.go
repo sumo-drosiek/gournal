@@ -530,5 +530,6 @@ type Tag struct {
 
 // Log is just a key-value map
 type Log struct {
+	filePath   string
 	attributes map[string]string
 }
