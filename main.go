@@ -7,8 +7,7 @@ import (
 
 func main() {
 	filename := "test-data/user-1000.journal"
-	cursor := "s=69e0bc24292040569344cea3ad97204c;i=1c41;b=6b84ae3ed1114c0b900c8c464e64a015;m=49623cf64;t=616d3ccb25bef;x=c6eb81d0bd51b7a5"
-	cursor = "s=69e0bc24292040569344cea3ad97204c;i=1c32;b=6b84ae3ed1114c0b900c8c464e64a015;m=45726758a;t=616d38db50216;x=18479011b29b10e"
+	cursor := "s=69e0bc24292040569344cea3ad97204c;i=810;b=6b84ae3ed1114c0b900c8c464e64a015;m=155e8d7;t=616c4f6c535b6;x=23a3cd7d2742e8c3"
 	reader, err := newReader(filename)
 
 	units := []string{
