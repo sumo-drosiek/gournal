@@ -5,8 +5,97 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"time"
 )
+
+type DirectoryReader struct {
+	readers []*Reader
+	data    chan Log
+}
+
+func newDirectoryReader() DirectoryReader {
+	return DirectoryReader{
+		readers: []*Reader{},
+		data:    make(chan Log),
+	}
+}
+
+func (dr *DirectoryReader) files() []string {
+	files := []string{}
+
+	for _, r := range dr.readers {
+		files = append(files, fmt.Sprintf("%x", r.header.file_id))
+	}
+	return files
+}
+
+func (dr *DirectoryReader) read(filterChain FilterChain) {
+	for log := range dr.data {
+		if !filterChain.filterIn(log.attributes) {
+			fmt.Printf("Rejecting \n\n")
+			continue
+		}
+		fmt.Printf("\n\n")
+		for key, value := range log.attributes {
+			fmt.Printf("%v=%v\n", key, value)
+		}
+	}
+}
+
+func (dr *DirectoryReader) monitor(ctx context.Context, include []string) {
+	buffer := make([]byte, 16)
+
+	for {
+		if ctx.Err() != nil {
+			break
+		}
+		for _, pattern := range include {
+			files, err := filepath.Glob(pattern)
+			if err != nil {
+				panic(err)
+			}
+
+			for _, path := range files {
+				file, err := os.Open(path)
+				if err != nil {
+					fmt.Printf("Error opening file (%s)\n", path)
+					continue
+				}
+
+				_, err = file.Seek(24, 0)
+				if err != nil {
+					fmt.Printf("Error seeking file (%s)\n", path)
+					continue
+				}
+
+				_, err = file.Read(buffer)
+				if err != nil {
+					fmt.Printf("Error reading file_id (%s)\n", path)
+					continue
+				}
+
+				file_id := fmt.Sprintf("%x", buffer)
+				currentFiles := dr.files()
+				if slices.Contains(currentFiles, file_id) {
+					file.Close()
+					continue
+				}
+
+				fmt.Printf("adding %s (%s) to files\n", file_id, path)
+
+				reader, err := newReaderFromPointer(file, dr.data)
+				if err != nil {
+					panic(err)
+				}
+
+				dr.readers = append(dr.readers, reader)
+				go reader.readAll(ctx)
+			}
+		}
+	}
+}
 
 // Reader object
 type Reader struct {
@@ -25,6 +114,26 @@ type Reader struct {
 	data chan Log
 }
 
+func newReaderFromPointer(file *os.File, data chan Log) (*Reader, error) {
+	reader := Reader{
+		file:           file,
+		buffer:         make([]byte, 1024*1024*1024),
+		headerBuffer:   make([]byte, OBJECT_HEADER_SIZE),
+		nextItemOffset: 0,
+		data:           data,
+		pollTime:       200 * time.Millisecond,
+	}
+
+	err := reader.loadHeader()
+	if err != nil {
+		return nil, err
+	}
+	reader.resetOffset()
+
+	// return Reader
+	return &reader, nil
+}
+
 // newReader creates Reader for the given filename
 func newReader(filename string) (*Reader, error) {
 	// Open file
@@ -33,23 +142,7 @@ func newReader(filename string) (*Reader, error) {
 		return nil, err
 	}
 
-	reader := Reader{
-		file:           file,
-		buffer:         make([]byte, 1024*1024*1024),
-		headerBuffer:   make([]byte, OBJECT_HEADER_SIZE),
-		nextItemOffset: 0,
-		data:           make(chan Log),
-		pollTime:       200 * time.Millisecond,
-	}
-
-	err = reader.loadHeader()
-	if err != nil {
-		return nil, err
-	}
-	reader.resetOffset()
-
-	// return Reader
-	return &reader, nil
+	return newReaderFromPointer(file, make(chan Log))
 }
 
 func (r *Reader) loadHeader() error {
@@ -282,7 +375,7 @@ main:
 				switch r.header.state {
 				// file is rotated, so we do not expect more data
 				case STATE_ARCHIVED:
-					close(r.data)
+					// close(r.data)
 					break main
 				// wait for database to be in offline state
 				case STATE_ONLINE:
@@ -291,7 +384,7 @@ main:
 				// wait for more data
 				default:
 					if ctx.Err() != nil {
-						close(r.data)
+						// close(r.data)
 						break main
 					}
 					time.Sleep(r.pollTime)
