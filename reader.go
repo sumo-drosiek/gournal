@@ -42,7 +42,10 @@ func newReader(filename string) (*Reader, error) {
 		pollTime:       200 * time.Millisecond,
 	}
 
-	reader.loadHeader()
+	err = reader.loadHeader()
+	if err != nil {
+		return nil, err
+	}
 	reader.resetOffset()
 
 	// return Reader
@@ -52,11 +55,19 @@ func newReader(filename string) (*Reader, error) {
 func (r *Reader) loadHeader() error {
 	// prepare buffer and read file header
 	buffer := make([]byte, HEADER_MAX_SIZE)
-	_, err := r.file.Read(buffer)
+	_, err := r.file.Seek(0, 0)
 	if err != nil {
 		return err
 	}
-	header := newHeader(buffer)
+	_, err = r.file.Read(buffer)
+	if err != nil {
+		return err
+	}
+	header, err := newHeader(buffer)
+
+	if err != nil {
+		return err
+	}
 
 	// check file signature
 	if string(header.signature[:]) != "LPKSHHRH" {
@@ -90,7 +101,10 @@ func (r *Reader) getObject(offset uint64) (*ObjectHeader, error) {
 		return nil, errors.New("cannot create object header. Not enough data has been read")
 	}
 
-	oh := newObjectHeader(r.headerBuffer)
+	oh, err := newObjectHeader(r.headerBuffer)
+	if err != nil {
+		return nil, err
+	}
 
 	// load payload to the ObjectHeader
 	read, err = r.file.Read(r.buffer[:oh.payloadSize()])
@@ -116,10 +130,6 @@ func (r *Reader) getData(offset uint64) (*Data, error) {
 
 	// return Data object
 	return oh.Data(r.compact), nil
-}
-
-func (r *Reader) isArchived() bool {
-	return r.header.isArchived()
 }
 
 // getEntryArray returns EntryArray object starting with given offset
@@ -160,7 +170,10 @@ func (r *Reader) getCursor(entry *Entry) string {
 
 // set next entry right after the cursor
 func (r *Reader) goToCursor(cursor string) error {
-	r.loadHeader()
+	err := r.loadHeader()
+	if err != nil {
+		return err
+	}
 	r.resetOffset()
 
 main:
@@ -251,11 +264,14 @@ func (r *Reader) getNextEntry() (*Entry, error) {
 
 // readAll reads the data and push it to data channel
 func (r *Reader) readAll(ctx context.Context) {
-	fmt.Printf("Read all\n")
 main:
 	for {
 		for {
-			r.loadHeader()
+			err := r.loadHeader()
+			if err != nil {
+				panic(err)
+			}
+
 			entry, err := r.getNextEntry()
 
 			if err != nil {

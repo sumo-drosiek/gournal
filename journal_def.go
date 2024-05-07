@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4"
@@ -116,7 +117,10 @@ type Header struct {
 }
 
 // newHeader creates Header out of byte array
-func newHeader(data []byte) *Header {
+func newHeader(data []byte) (*Header, error) {
+	if len(data) < 208 {
+		return nil, fmt.Errorf("not enough data (%d) to read the header", len(data))
+	}
 	hu := Header{
 		signature:               ([8]byte)(data[0:8]),
 		compatible_flags:        le32(([4]byte)(data[8:12])),
@@ -146,54 +150,54 @@ func newHeader(data []byte) *Header {
 
 	// Added in 187
 	if hu.header_size > 208 {
+		if len(data) < 224 {
+			return nil, fmt.Errorf("not enough data (%d) to read the header", len(data))
+		}
 		hu.n_data = le64(([8]byte)(data[208:216]))
 		hu.n_fields = le64(([8]byte)(data[216:224]))
 	}
 
 	// Added in 189
 	if hu.header_size > 224 {
+		if len(data) < 240 {
+			return nil, fmt.Errorf("not enough data (%d) to read the header", len(data))
+		}
 		hu.n_tags = le64(([8]byte)(data[224:232]))
 		hu.n_entry_arrays = le64(([8]byte)(data[232:240]))
 	}
 
 	// Added in 246
 	if hu.header_size > 240 {
+		if len(data) < 256 {
+			return nil, fmt.Errorf("not enough data (%d) to read the header", len(data))
+		}
 		hu.data_hash_chain_depth = le64(([8]byte)(data[240:248]))
 		hu.field_hash_chain_depth = le64(([8]byte)(data[248:256]))
 	}
 
 	// Added in 252
 	if hu.header_size > 256 {
+		if len(data) < 272 {
+			return nil, fmt.Errorf("not enough data (%d) to read the header", len(data))
+		}
 		hu.tail_entry_array_offset = le64(([8]byte)(data[256:264]))
 		hu.tail_entry_array_n_entries = le64(([8]byte)(data[264:272]))
 	}
 
 	// Added in 254
 	if hu.header_size > 272 {
+		if len(data) < HEADER_MAX_SIZE {
+			return nil, fmt.Errorf("not enough data (%d) to read the header", len(data))
+		}
 		hu.tail_entry_offset = le64(([8]byte)(data[272:280]))
 	}
 
-	return &hu
+	return &hu, nil
 }
 
 // isCompact returns true if HEADER_INCOMPATIBLE_COMPACT flag is enable
 func (hu Header) isCompact() bool {
 	return hu.incompatible_flags&HEADER_INCOMPATIBLE_COMPACT > 0
-}
-
-// isOnline returns true if state is online
-func (hu Header) isOnline() bool {
-	return hu.state&STATE_ONLINE > 0
-}
-
-// isOnline returns true if state is offline
-func (hu Header) isOffline() bool {
-	return hu.state&STATE_OFFLINE > 0
-}
-
-// isOnline returns true if state is archived
-func (hu Header) isArchived() bool {
-	return hu.state&STATE_ARCHIVED > 0
 }
 
 // Definition of ObjectHeader type
@@ -208,7 +212,10 @@ type ObjectHeader struct {
 
 // newObjectHeader creates ObjectHeader out of byte array
 // !!!It doesn't set the payload. Use setPayload to set it!!!
-func newObjectHeader(data []byte) *ObjectHeader {
+func newObjectHeader(data []byte) (*ObjectHeader, error) {
+	if len(data) < 16 {
+		return nil, fmt.Errorf("not enough data (%d) to read the object header", len(data))
+	}
 	oh := ObjectHeader{
 		objectType: data[0],
 		flags:      data[1],
@@ -216,7 +223,7 @@ func newObjectHeader(data []byte) *ObjectHeader {
 		size:       le64(([8]byte)(data[8:16])),
 	}
 
-	return &oh
+	return &oh, nil
 }
 
 // setPayload sets payload for ObjectHeader
@@ -229,7 +236,7 @@ func (oh *ObjectHeader) payloadSize() int {
 	return int(oh.size) - OBJECT_HEADER_SIZE
 }
 
-// DataHashTable returns EntryArray object out of the ObjectHeader object
+// EntryArray returns EntryArray object out of the ObjectHeader object
 func (oh *ObjectHeader) EntryArray(incompatible_compact bool) *EntryArray {
 	do := EntryArray{
 		ObjectHeader: oh,
@@ -249,6 +256,7 @@ func (oh *ObjectHeader) EntryArray(incompatible_compact bool) *EntryArray {
 			compactItems = append(compactItems, le32(([4]byte)(oh.payload[ptr:ptr+4])))
 			ptr += 4
 		}
+		do.countItems = len(compactItems)
 	} else {
 		for {
 			if ptr == len(oh.payload) {
@@ -257,6 +265,7 @@ func (oh *ObjectHeader) EntryArray(incompatible_compact bool) *EntryArray {
 			regularItems = append(regularItems, le64(([8]byte)(oh.payload[ptr:ptr+8])))
 			ptr += 8
 		}
+		do.countItems = len(regularItems)
 	}
 
 	do.compactItems = compactItems
@@ -265,7 +274,7 @@ func (oh *ObjectHeader) EntryArray(incompatible_compact bool) *EntryArray {
 	return &do
 }
 
-// DataHashTable returns Entry object out of the ObjectHeader object
+// Entry returns Entry object out of the ObjectHeader object
 func (oh *ObjectHeader) Entry(incompatible_compact bool) *Entry {
 	eo := Entry{
 		ObjectHeader: oh,
@@ -310,7 +319,7 @@ func (oh *ObjectHeader) Entry(incompatible_compact bool) *Entry {
 	return &eo
 }
 
-// DataHashTable returns Data object out of the ObjectHeader object
+// Data returns Data object out of the ObjectHeader object
 func (oh *ObjectHeader) Data(incompatibleCompact bool) *Data {
 	do := Data{
 		ObjectHeader:       oh,
@@ -422,18 +431,6 @@ func (so Data) getPayloadKeyValue() (string, string, error) {
 	}
 }
 
-// definition of Field type
-// rel: https://systemd.io/JOURNAL_FILE_FORMAT/#field-objects
-type Field struct {
-	*ObjectHeader
-
-	hash             uint64 // le64_t
-	next_hash_offset uint64 // le64_t
-	head_data_offset uint64 // le64_t
-
-	payload []uint8 // uint8_t[]
-}
-
 // definition of helper structure for regular items
 type regularEntryItem struct {
 	object_offset uint64 // le64_t
@@ -521,19 +518,7 @@ func (eao *EntryArray) items() []uint64 {
 	return items
 }
 
-// definition of Tag type
-// rel: https://systemd.io/JOURNAL_FILE_FORMAT/#tag-object
-type Tag struct {
-	*ObjectHeader
-
-	seqnum uint64 // le64_t
-	epoch  uint64 // le64_t
-
-	tag [TAG_LENGTH]uint8 // uint8_t[] /* SHA-256 HMAC */
-}
-
 // Log is just a key-value map
 type Log struct {
-	filePath   string
 	attributes map[string]string
 }
