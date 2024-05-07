@@ -61,7 +61,37 @@ const (
 	ATTRIBUTE_CURSOR              = "__CURSOR"
 	ATTRIBUTE_REALTIME_TIMESTAMP  = "__REALTIME_TIMESTAMP"
 	ATTRIBUTE_MONOTONIC_TIMESTAMP = "__MONOTONIC_TIMESTAMP"
+
+	PRIORITY_EMERGENCY = "emerg"
+	PRIORITY_ALERT     = "alert"
+	PRIORITY_CRITICAL  = "crit"
+	PRIORITY_ERROR     = "err"
+	PRIORITY_WARNING   = "warning"
+	PRIORITY_NOTICE    = "notice"
+	PRIORITY_INFO      = "info"
+	PRIORITY_DEBUG     = "debug"
+	PRIORITY_
 )
+
+var PRIORITIES = [8]string{
+	PRIORITY_EMERGENCY,
+	PRIORITY_ALERT,
+	PRIORITY_CRITICAL,
+	PRIORITY_ERROR,
+	PRIORITY_WARNING,
+	PRIORITY_NOTICE,
+	PRIORITY_INFO,
+	PRIORITY_DEBUG,
+}
+
+func priorityID(priority string) (int, error) {
+	for id, p := range PRIORITIES {
+		if p == priority {
+			return id, nil
+		}
+	}
+	return 0, fmt.Errorf("unknown priority name: %s", priority)
+}
 
 // le32 converts [4]byte to uint32
 func le32(data [4]byte) uint32 {
